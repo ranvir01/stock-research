@@ -1,0 +1,15 @@
+# Personal / sensitive
+.env
+*.env
+credentials*
+secrets*
+
+# Broker exports (keep templates, ignore real data if you prefer)
+exports/*.csv
+exports/*.pdf
+
+# OS / editor
+.DS_Store
+*.swp
+.vscode/
+.idea/
