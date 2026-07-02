@@ -19,6 +19,7 @@ import csv
 import json
 import os
 import smtplib
+import string
 import subprocess
 import sys
 import time
@@ -72,6 +73,7 @@ CONFIG = {
     # --- Output / alerting ---
     "csv_log": "bb_monitor_log.csv",      # audit trail, appended every run
     "state_file": "bb_monitor_state.json",# persists trailing high + already-fired tranches
+    "html_report": "bb_report.html",      # live report regenerated every check — open in a browser
     "desktop_notify": True,               # best-effort notify-send / osascript
     "email": {
         "enabled": False,                 # set True + fill below to get emails
@@ -353,6 +355,170 @@ def summary(metrics):
           f"hard stop ${CONFIG['hard_stop']:.2f} ({(CONFIG['hard_stop'] / m['close'] - 1) * 100:+.1f}%)")
 
 
+# ------------------------- live html report ----------------------
+# The action plan from stocks/blackberry/FINAL-REPORT.md, fused with live data.
+# Regenerated on every check so the advice sheet is never stale.
+
+REPORT_TEMPLATE = string.Template("""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BB Live Report — $stamp</title>
+<style>
+ :root{--ink:#1a2332;--muted:#5a6678;--line:#dde3ec;--bg:#fff;--soft:#f5f7fa;
+   --sell:#8a2f2f;--sellbg:#faf1f0;--hold:#2f5c46;--holdbg:#eff6f1;--accent:#28415e;--warn:#8a6d1f;--warnbg:#faf6e9}
+ @media (prefers-color-scheme:dark){:root{--ink:#e8ecf3;--muted:#9aa5b5;--line:#333c4c;--bg:#141922;
+   --soft:#1c2330;--sell:#e09a93;--sellbg:#2a1e1d;--hold:#93c7ab;--holdbg:#1a2822;--accent:#9db8d9;--warn:#d9c27a;--warnbg:#2a2517}}
+ *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 Georgia,serif}
+ .page{max-width:880px;margin:0 auto;padding:40px 36px 60px}
+ .kicker{font:600 11px/1 -apple-system,'Segoe UI',sans-serif;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+ h1{font-size:26px;margin:0 0 4px}.meta{color:var(--muted);font-size:13px}
+ .rule{border:0;border-top:2px solid var(--ink);margin:18px 0 22px}
+ h2{font:700 12.5px/1.3 -apple-system,'Segoe UI',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:30px 0 10px}
+ table{width:100%;border-collapse:collapse;margin:10px 0 18px;font:13.5px/1.5 -apple-system,'Segoe UI',sans-serif}
+ th{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);text-align:left;padding:7px 9px;border-bottom:2px solid var(--ink)}
+ td{padding:8px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+ td.num{font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:600}
+ .alerts{border-left:4px solid var(--sell);background:var(--sellbg);padding:14px 18px;margin:16px 0;font:14px/1.6 -apple-system,sans-serif}
+ .quiet{border-left:4px solid var(--hold);background:var(--holdbg);padding:14px 18px;margin:16px 0;font:14px/1.6 -apple-system,sans-serif}
+ .pill{display:inline-block;font:700 10.5px/1 -apple-system,sans-serif;letter-spacing:.06em;padding:4px 8px;border-radius:3px;text-transform:uppercase}
+ .pill.fired{background:var(--sellbg);color:var(--sell)}.pill.armed{background:var(--soft);color:var(--muted)}
+ .pill.watch{background:var(--warnbg);color:var(--warn)}.pill.ok{background:var(--holdbg);color:var(--hold)}
+ .act-sell td:first-child{color:var(--sell);font-weight:700;white-space:nowrap}
+ .act-hold td:first-child{color:var(--hold);font-weight:700;white-space:nowrap}
+ .base{background:var(--soft);font-weight:600}
+ .fine{font-size:12px;color:var(--muted);font-style:italic}
+ .footer{margin-top:36px;padding-top:12px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted)}
+ @media print{.page{padding:0}}
+</style></head><body><div class="page">
+
+<div class="kicker">BB Position Monitor · Live Report · data: $source</div>
+<h1>BlackBerry (BB) — Position &amp; Exit Discipline</h1>
+<div class="meta">Generated $stamp · bar date $bar_date · plan of record: stocks/blackberry/FINAL-REPORT.md</div>
+<hr class="rule">
+
+$alert_block
+
+<h2>Position now</h2>
+<table>
+<tr><th>Price</th><th>Position value</th><th>Unrealized P&amp;L</th><th>Breakeven (blended)</th><th>Hard stop</th></tr>
+<tr><td class="num">$$$price</td><td class="num">$$$value</td><td class="num">$pnl ($pnl_pct)</td>
+<td class="num">$$$avg ($to_breakeven away)</td><td class="num">$$$stop ($to_stop below)</td></tr>
+</table>
+<table>
+<tr><th>RSI(14)</th><th>vs 20-day SMA $$$sma20</th><th>50-day SMA</th><th>200-day SMA</th><th>ATR(14)</th><th>Trail high / drawdown</th></tr>
+<tr><td class="num">$rsi</td><td class="num">$ext</td><td class="num">$$$sma50</td><td class="num">$$$sma200</td>
+<td class="num">$$$atr</td><td class="num">$$$trail_high / $trail_dd</td></tr>
+</table>
+
+<h2>Trigger board</h2>
+<table>
+<tr><th style="width:110px">Status</th><th>Rule</th><th>Where we stand</th></tr>
+$trigger_rows
+</table>
+
+<h2>The plan of record (July 2026 verdict)</h2>
+<table>
+<tr><th style="width:80px">Action</th><th>Detail</th></tr>
+<tr class="act-sell"><td>SELL</td><td>Entire ~$$16 lot (≈2,500 sh) near $$13 — harvests ≈$$7,300 long-term tax loss. Sell <b>specific lots</b>, never default FIFO.</td></tr>
+<tr class="act-sell"><td>SELL</td><td>~1,000 sh of the ~$$13 lot (tax-neutral) → total trim ≈70%, proceeds ≈$$45,700.</td></tr>
+<tr class="act-hold"><td>KEEP</td><td>~1,500 sh runner. Stop: daily close &lt; $$9.80 → sell all, no exceptions. Trim ~500 sh at $$13.60, ~500 at $$15.50, exit at $$18.</td></tr>
+<tr class="act-hold"><td>OPTION</td><td>Sell $$15-strike covered calls 1–2 mo out (IV rich; assignment = exit above blended basis).</td></tr>
+<tr class="act-hold"><td>PARK</td><td>Proceeds → cash/T-bills; redeployment is a separate decision.</td></tr>
+</table>
+
+<h2>Probability map (July 2026 baseline)</h2>
+<table>
+<tr><th>Horizon</th><th>Bear · 30%</th><th>Base · 45%</th><th>Bull · 25%</th></tr>
+<tr><td><b>2–8 weeks</b></td><td>Snap-back to $$9.84 / $$8–9 base</td><td class="base">Chop $$11–14 while RSI cools</td><td>Through $$13.59 → $$14–15 → ~$$18</td></tr>
+<tr><td><b>12 months</b></td><td>$$6–8 (multiple compression)</td><td class="base">$$12–15 (grows into valuation)</td><td>$$17–20+ (re-rating persists)</td></tr>
+</table>
+
+<h2>Calendar</h2>
+<table>
+<tr><th style="width:150px">Date</th><th>Event</th><th>Watch</th></tr>
+<tr><td class="num">$wash_row
+<tr><td class="num">~Jul 24, 2026</td><td>Short-interest print</td><td>Still rising into strength = distribution confirmed</td></tr>
+<tr><td class="num">Aug 14, 2026</td><td>Q2 13F deadline</td><td>Did active managers chase or trim? Fairfax follow-through?</td></tr>
+<tr><td class="num">$earn_date ($earn_days)</td><td><b>Q2 FY27 earnings</b></td><td>QNX <i>royalty</i> revenue (not backlog) · Secure Comms/DND revenue · guidance held</td></tr>
+</table>
+
+<div class="footer">Auto-generated by tools/bb_monitor.py — alerts only, never trades. Research basis: two-session
+multi-agent process (Bull/Bear debate + position-blind Fundamentals/Technicals/Flow/Industry team), citations in
+stocks/blackberry/sources.md &amp; outlook.md. Not personalized financial advice; verify live quotes before orders.</div>
+</div></body></html>
+""")
+
+
+def write_report(metrics, alerts, state, source):
+    """Render the live HTML report — the FINAL-REPORT action plan fused with current data."""
+    c = CONFIG
+    shares, basis, avg = position()
+    close = metrics["close"]
+    pill = lambda cls, txt: f'<span class="pill {cls}">{txt}</span>'
+
+    rows = []
+    # hard stop
+    fired = close < c["hard_stop"]
+    rows.append(f"<tr><td>{pill('fired' if fired else 'armed', 'FIRED' if fired else 'ARMED')}</td>"
+                f"<td>Hard stop — daily close &lt; ${c['hard_stop']:.2f} → sell all remaining</td>"
+                f"<td class='num'>{(c['hard_stop'] / close - 1) * 100:+.1f}% away</td></tr>")
+    # tranches
+    for level, advice in c["tranche_levels"].items():
+        done = f"{level:.2f}" in state["fired_tranches"]
+        rows.append(f"<tr><td>{pill('fired' if done else 'armed', 'FIRED' if done else 'ARMED')}</td>"
+                    f"<td>Tranche ${level:.2f} — {advice}</td>"
+                    f"<td class='num'>{(level / close - 1) * 100:+.1f}% away</td></tr>")
+    # trailing stop
+    hi = state.get("trailing_high") or close
+    dd = (hi - close) / hi * 100 if hi else 0.0
+    t_cls = "fired" if dd >= c["trailing_stop_pct"] else ("watch" if dd >= c["trailing_stop_pct"] * 0.6 else "ok")
+    rows.append(f"<tr><td>{pill(t_cls, 'FIRED' if t_cls == 'fired' else ('WATCH' if t_cls == 'watch' else 'OK'))}</td>"
+                f"<td>Trailing stop — {c['trailing_stop_pct']:.0f}% off highest close since {c['trailing_start_date']}</td>"
+                f"<td class='num'>{dd:.1f}% off ${hi:.2f} high</td></tr>")
+    # exhaustion
+    rsi_v = metrics["rsi"] if metrics["rsi"] != "" else 0
+    hot = rsi_v > c["rsi_overbought"] and metrics["ext_vs_sma20_pct"] > c["sma_extension_pct"]
+    rows.append(f"<tr><td>{pill('watch' if hot else 'ok', 'WATCH' if hot else 'OK')}</td>"
+                f"<td>Momentum exhaustion — RSI &gt; {c['rsi_overbought']:.0f} and &gt; {c['sma_extension_pct']:.0f}% above SMA20</td>"
+                f"<td class='num'>RSI {rsi_v} · {metrics['ext_vs_sma20_pct']:+.1f}% vs SMA20</td></tr>")
+
+    # wash-sale calendar row + banner text
+    if c["loss_sale_date"]:
+        end = date.fromisoformat(c["loss_sale_date"]) + timedelta(days=c["wash_sale_days"])
+        left = (end - date.today()).days
+        wash_row = (f"{end} ({max(left, 0)}d left)</td><td>Wash-sale window ends</td>"
+                    f"<td>Until then: buy NO BB in ANY account (incl. IRA/spouse)</td></tr>")
+    else:
+        wash_row = ("—</td><td>Wash-sale clock not started</td>"
+                    "<td>Set CONFIG['loss_sale_date'] the day you sell at a loss</td></tr>")
+
+    earn = date.fromisoformat(c["earnings_date"])
+    earn_days = (earn - date.today()).days
+
+    if alerts:
+        alert_block = ("<div class='alerts'><b>⚠ TRIGGERS FIRED THIS CHECK:</b><br>"
+                       + "<br>".join(alerts) + "</div>")
+    else:
+        alert_block = "<div class='quiet'>✓ No triggers fired this check — discipline intact, nothing to do.</div>"
+
+    html = REPORT_TEMPLATE.substitute(
+        stamp=datetime.now().strftime("%Y-%m-%d %H:%M"), source=source,
+        bar_date=metrics["date"], alert_block=alert_block,
+        price=f"{close:,.2f}", value=f"{metrics['value']:,.0f}",
+        pnl=f"${metrics['pnl']:+,.0f}", pnl_pct=f"{metrics['pnl_pct']:+.1f}%",
+        avg=f"{avg:.2f}", to_breakeven=f"{(avg / close - 1) * 100:+.1f}%",
+        stop=f"{c['hard_stop']:.2f}", to_stop=f"{(c['hard_stop'] / close - 1) * 100:+.1f}%",
+        rsi=f"{metrics['rsi']}", ext=f"{metrics['ext_vs_sma20_pct']:+.1f}%",
+        sma20=f"{metrics['sma20']}", sma50=f"{metrics['sma50']}", sma200=f"{metrics['sma200']}",
+        atr=f"{metrics['atr']}", trail_high=f"{hi:.2f}", trail_dd=f"{dd:.1f}%",
+        trigger_rows="\n".join(rows), wash_row=wash_row,
+        earn_date=str(earn), earn_days=f"{earn_days}d" if earn_days >= 0 else "past",
+    )
+    with open(c["html_report"], "w") as f:
+        f.write(html)
+    print(f"  Live report -> {c['html_report']}")
+
+
 # ------------------------------ modes ----------------------------
 
 def run_once(csv_path=None):
@@ -363,6 +529,8 @@ def run_once(csv_path=None):
     dispatch(alerts)
     if not alerts:
         print("\n  No triggers fired. Holding pattern — discipline intact.")
+    write_report(metrics, alerts, state,
+                 f"offline CSV ({os.path.basename(csv_path)})" if csv_path else "yfinance (live/delayed)")
     metrics["run_at"] = datetime.now().isoformat(timespec="seconds")
     log_csv(metrics)
     save_state(state)
