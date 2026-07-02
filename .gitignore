@@ -13,3 +13,8 @@ exports/*.pdf
 *.swp
 .vscode/
 .idea/
+
+# bb_monitor.py run artifacts (regenerated every check)
+tools/bb_report.html
+tools/bb_monitor_log.csv
+tools/bb_monitor_state.json
