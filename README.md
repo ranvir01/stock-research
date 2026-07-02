@@ -24,9 +24,13 @@ stock-research/
 │       ├── research-log.md     # Dated notes as you learn
 │       ├── thesis.md           # Bull / bear / base case
 │       ├── decision.md         # Final action & rationale
-│       └── sources.md          # Links, filings, transcripts
-└── templates/                  # Duplicate for the next stock
-    └── new-stock/
+│       ├── sources.md          # Links, filings, transcripts
+│       └── outlook.md          # Position-blind fundamental/technical outlook
+├── templates/                  # Duplicate for the next stock
+│   └── new-stock/
+└── tools/
+    ├── bb_monitor.py           # BB position monitor & exit-discipline tool (alerts only)
+    └── requirements.txt        # pip install -r tools/requirements.txt
 ```
 
 ## Workflow
